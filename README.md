@@ -3,10 +3,10 @@ and returning curl-able blog posts.
 
 ## To curl the blog
 ```sh
-curl news.whereisanirudh.info
+curl whereisanirudh.info
 ```
 
 ## Additional features
 ```sh
-curl news.whereisanirudh.info/help
+curl whereisanirudh.info/help
 ```
