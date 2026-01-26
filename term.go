@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,7 +37,10 @@ type Item struct {
 var rss Rss
 var NegativeId = errors.New("getHtml: Negative id value recieved in request")
 
+var cache = make(map[string]string)
+
 func getXML() {
+	log.Println("performing an rss fetch")
 	rss = Rss{}
 	resp, err := http.Get(fmt.Sprintf("%s/feed", cfg.BaseUrl))
 	if err != nil {
@@ -148,11 +153,13 @@ func parseHTML(body []byte) (string, error) {
 
 func getHtml(id string, theme string) (string, error) {
 
+	var markdown string
 	var idx int
+
 	idx, err := strconv.Atoi(id)
 
 	if err != nil {
-		fmt.Printf("getHtml: error converting id to an int %s", err)
+		log.Printf("getHtml: error converting id to an int %s\n", err)
 		idx = len(rss.Channel.ItemList) - 1
 	}
 
@@ -167,28 +174,57 @@ func getHtml(id string, theme string) (string, error) {
 	}
 
 	var item Item = rss.Channel.ItemList[idx]
-	resp, err := http.Get(item.Link)
-	if err != nil {
-		return "", fmt.Errorf("getHtml: netowrk request failed on get %s %w", item.Link, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	cahe_path, prs := cache[item.Title]
+	if !prs {
 
-	if err != nil {
-		return "", fmt.Errorf("getHtml: failed to read response body %s %w", item.Link, err)
-	}
+		resp, err := http.Get(item.Link)
+		if err != nil {
+			return "", fmt.Errorf("getHtml: netowrk request failed on get %s %w", item.Link, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
 
-	htmlData, err := parseHTML(body)
-	if err != nil {
-		return "", fmt.Errorf("getHTML: %w", err)
-	}
+		if err != nil {
+			return "", fmt.Errorf("getHtml: failed to read response body %s %w", item.Link, err)
+		}
 
-	markdown, err := htmltomarkdown.ConvertString(
-		htmlData,
-		converter.WithDomain(cfg.BaseUrl),
-	)
-	if err != nil {
-		return "", fmt.Errorf("getHtml: markdown conversion failed for %s %w", item.Title, err)
+		htmlData, err := parseHTML(body)
+		if err != nil {
+			return "", fmt.Errorf("getHTML: %w", err)
+		}
+
+		markdown, err = htmltomarkdown.ConvertString(
+			htmlData,
+			converter.WithDomain(cfg.BaseUrl),
+		)
+		if err != nil {
+			return "", fmt.Errorf("getHtml: markdown conversion failed for %s %w", item.Title, err)
+		}
+
+		filename := fmt.Sprintf("%s.txt", item.Title)
+		file, err := os.Create(filename)
+		if err != nil {
+			log.Printf("Error creating file: %s", err)
+		} else {
+			defer file.Close()
+			cache[item.Title] = filename
+			_, err = file.WriteString(markdown)
+
+			if err != nil {
+				log.Printf("Error writing to the file: %s", err)
+			}
+		}
+
+		
+	} else {
+		data, err := os.ReadFile(cahe_path)
+		log.Printf("Using cached results for %s", item.Title)
+
+		if err != nil {
+			return "", fmt.Errorf("Error readind file %s due to %s", cahe_path, err)
+		}
+		markdown = string(data)
+
 	}
 
 	return renderMarkdown(markdown, 120, theme), nil

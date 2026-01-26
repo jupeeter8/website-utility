@@ -207,7 +207,16 @@ func help(w http.ResponseWriter, req *http.Request) {
 
 func main() {
 
-	err := godotenv.Load()
+	file, err := os.OpenFile("appLogs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    log.SetOutput(file)
+	log.Println("Systeminit")
+
+	err = godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 		panic(err)
