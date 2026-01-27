@@ -2,14 +2,12 @@ package main
 
 import (
 	"bytes"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,57 +18,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-type Rss struct {
-	Channel *Channel `xml:"channel"`
-}
-
-type Channel struct {
-	ItemList []Item `xml:"item"`
-}
-
-type Item struct {
-	Title   string `xml:"title"`
-	Link    string `xml:"link"`
-	PubDate string `xml:"pubDate"`
-}
-
-var rss Rss
 var NegativeId = errors.New("getHtml: Negative id value recieved in request")
-
-var cache = make(map[string]string)
-
-func getXML() {
-	log.Println("performing an rss fetch")
-	rss = Rss{}
-	resp, err := http.Get(fmt.Sprintf("%s/feed", cfg.BaseUrl))
-	if err != nil {
-		fmt.Printf("getXML: failed to fetch rss feed %s", err)
-		panic(err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-
-	if err != nil {
-		fmt.Printf("getXML: failure in reading body of the response %s", err)
-		panic(err)
-	}
-
-	if err := xml.Unmarshal(body, &rss); err != nil {
-		fmt.Printf("getXML: failure in parsing XML body %s", err)
-		panic(err)
-	}
-
-	sort.Slice(rss.Channel.ItemList, func(i, j int) bool {
-		timeI, err1 := time.Parse(time.RFC1123, rss.Channel.ItemList[i].PubDate)
-		timeJ, err2 := time.Parse(time.RFC1123, rss.Channel.ItemList[j].PubDate)
-
-		if err1 != nil || err2 != nil {
-			return false
-		}
-		return timeJ.After(timeI)
-
-	})
-}
 
 func getPageList() (string, error) {
 
