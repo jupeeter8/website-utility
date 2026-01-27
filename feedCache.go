@@ -28,34 +28,43 @@ type Item struct {
 }
 
 func fetchXML() (Rss, error) {
-
-	resp, err := http.Get(fmt.Sprintf("%s/feed", cfg.BaseUrl))
-
+	client := &http.Client {
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Get(fmt.Sprintf("%s/feed", cfg.BaseUrl))
 	if err != nil {
 		log.Printf("fetchXML: failed to fetch rss feed %s\n", err)
 		return Rss{}, err
 	}
-
 	defer resp.Body.Close()
-
+	log.Println("Successfully fetched xml")
 	body, err := io.ReadAll(resp.Body)
-
 	if err != nil {
 		log.Printf("fetchXML: failure in reading body of the response %s\n", err)
 		return Rss{}, err
 	}
 	var rss Rss
-
 	if err := xml.Unmarshal(body, &rss); err != nil {
 		log.Printf("fetchXML: failure in parsing XML body %s\n", err)
 		return Rss{}, err
 	}
+	log.Println("XML Unmarshal successful")
 	return rss, nil
+}
+func genCacheMap() {
+
+	for _, item := range rss.Channel.ItemList {
+		_, prs :=  cache[item.Title]
+		if !prs {
+			cache[item.Title] = item.Title
+		}
+	}
+
 }
 func getXML() {
 
-	var updates = make(chan Rss)
-	var ticker = time.Tick(10 * time.Second)
+	var updates = make(chan Rss, 1)
+	var ticker = time.Tick(30 * time.Minute)
 
 	fetch := func() {
 		log.Println("getXML: performing an rss fetch")
@@ -68,13 +77,11 @@ func getXML() {
 	}
 
 	fetch()
-
+	log.Println("Intial fetch complete")
 	for {
 		select {
-		case <-ticker:
-			fetch()
 		case rss = <-updates:
-
+			log.Println("Recieved latest rss xml")
 			sort.Slice(rss.Channel.ItemList, func(i, j int) bool {
 				timeI, err1 := time.Parse(time.RFC1123, rss.Channel.ItemList[i].PubDate)
 				timeJ, err2 := time.Parse(time.RFC1123, rss.Channel.ItemList[j].PubDate)
@@ -85,7 +92,9 @@ func getXML() {
 				return timeJ.After(timeI)
 
 			})
-			fmt.Println(rss.Channel.ItemList)
+			genCacheMap()
+		case <-ticker:
+			fetch()
 		}
 	}
 

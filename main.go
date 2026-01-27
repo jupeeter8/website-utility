@@ -174,14 +174,14 @@ func blog(w http.ResponseWriter, req *http.Request) {
 func news(w http.ResponseWriter, req *http.Request) {
 
 	theme := req.URL.Query().Get("theme")
-	result, err := getHtml(req.PathValue("id"), theme)
+	result, err := genPageMarkdown(req.PathValue("id"), theme)
 	if err != nil {
 		switch {
 		case errors.Is(err, NegativeId):
 			fmt.Printf("Bad request recieved for a blog post with negative index %s", err)
 			http.Error(w, "Blog pages can not have negative values", http.StatusBadRequest)
 		default:
-			fmt.Printf("Failes to process the request for path / %s", err)
+			fmt.Printf("Failes to process the request for path /:\n %s", err)
 			http.Error(w, "Server Failed to process the request", http.StatusInternalServerError)
 		}
 	}
@@ -227,7 +227,7 @@ func main() {
 		panic(err)
 	}
 
-	getXML()
+	go getXML()
 	http.HandleFunc("/", news)
 	http.HandleFunc("/{id}", news)
 	http.HandleFunc("/blog", blog)

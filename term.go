@@ -99,7 +99,36 @@ func parseHTML(body []byte) (string, error) {
 	return sb.String(), nil
 }
 
-func getHtml(id string, theme string) (string, error) {
+func getHTML(pageURL, pageTitle string) (string, error) {
+
+	log.Printf("Making network request")
+
+	resp, err := http.Get(pageURL)
+	if err != nil {
+		return "", fmt.Errorf("getHtml: netowrk request failed on get %s %w", pageURL, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return "", fmt.Errorf("getHtml: failed to read response body %s %w", pageURL, err)
+	}
+
+	htmlData, err := parseHTML(body)
+	if err != nil {
+		return "", fmt.Errorf("getHTML: %w", err)
+	}
+
+	markdown, err := htmltomarkdown.ConvertString(
+		htmlData,
+		converter.WithDomain(cfg.BaseUrl),
+	)
+	if err != nil {
+		return "", fmt.Errorf("getHtml: markdown conversion failed for %s %w", pageTitle, err)
+	}
+	return markdown, nil
+}
+func genPageMarkdown(id string, theme string) (string, error) {
 
 	var markdown string
 	var idx int
@@ -122,57 +151,50 @@ func getHtml(id string, theme string) (string, error) {
 	}
 
 	var item Item = rss.Channel.ItemList[idx]
-	cahe_path, prs := cache[item.Title]
-	if !prs {
+	_, prs := cache[item.Title]
 
-		resp, err := http.Get(item.Link)
-		if err != nil {
-			return "", fmt.Errorf("getHtml: netowrk request failed on get %s %w", item.Link, err)
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-
-		if err != nil {
-			return "", fmt.Errorf("getHtml: failed to read response body %s %w", item.Link, err)
-		}
-
-		htmlData, err := parseHTML(body)
-		if err != nil {
-			return "", fmt.Errorf("getHTML: %w", err)
-		}
-
-		markdown, err = htmltomarkdown.ConvertString(
-			htmlData,
-			converter.WithDomain(cfg.BaseUrl),
-		)
-		if err != nil {
-			return "", fmt.Errorf("getHtml: markdown conversion failed for %s %w", item.Title, err)
-		}
-
-		filename := fmt.Sprintf("%s.txt", item.Title)
+	storefile := func(filename string) {
 		file, err := os.Create(filename)
 		if err != nil {
 			log.Printf("Error creating file: %s", err)
 		} else {
 			defer file.Close()
-			cache[item.Title] = filename
 			_, err = file.WriteString(markdown)
 
 			if err != nil {
 				log.Printf("Error writing to the file: %s", err)
 			}
 		}
+	}
+	filename := fmt.Sprintf("%s.txt", item.Title)
+	if !prs {
+		log.Printf("Page \"%s\" not present in the cache", item.Title)
+		cache[item.Title] = filename
+	}
 
-		
-	} else {
-		data, err := os.ReadFile(cahe_path)
-		log.Printf("Using cached results for %s", item.Title)
+	if _, err := os.Stat(filename); err != nil {
 
+		markdown, err = getHTML(item.Link, item.Title)
 		if err != nil {
-			return "", fmt.Errorf("Error readind file %s due to %s", cahe_path, err)
+			return "", fmt.Errorf("genPageMarkdown: Error Fetching html %s:\n", err)
 		}
-		markdown = string(data)
+		storefile(filename)
+		return renderMarkdown(markdown, 120, theme), nil
 
+	}
+
+	log.Printf("Stat successful. Path %s exists\n", filename)
+	log.Printf("Using cached path \"%s\"\n", filename)
+
+	data, err := os.ReadFile(filename)
+
+	if err != nil {
+		log.Printf("genPageMarkdown: Error readind file \"%s\" due to %s", filename, err)
+		if markdown, err := getHTML(item.Link, item.Title); err == nil {
+		return renderMarkdown(markdown, 120, theme), nil
+		}
+	} else {
+	 markdown = string(data)
 	}
 
 	return renderMarkdown(markdown, 120, theme), nil
