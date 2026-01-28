@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -128,75 +127,87 @@ func getHTML(pageURL, pageTitle string) (string, error) {
 	}
 	return markdown, nil
 }
+func getRssPageData(idx int) (Item, int, error) {
+
+	if idx < 0 {
+		return Item{}, 0, NegativeId
+	}
+
+	if idx > len(rss.Channel.ItemList)-1 {
+		// TODO: This will force updates everytime a id
+		// greater than the total list size is passed
+		// Need a mechanism to ignore repetated fetch
+		// within a time frame
+		log.Printf("Requested id: %d is larger than the rss content list, fetching rss data gain", idx)
+		var updates = make(chan Rss)
+		go updateRssList(updates)
+		rss = <-updates
+		sortFeed()
+
+		if idx > len(rss.Channel.ItemList) - 1 {
+			idx = len(rss.Channel.ItemList) - 1
+		}
+	}
+
+	return rss.Channel.ItemList[idx], idx, nil
+}
+
+func getPageMarkdown(idx int, item Item) (string, error) {
+
+	latest := false
+	type result struct {
+		md string
+		err error
+	}
+
+	if markdown, isSet := getFromCache(idx);  isSet {
+		log.Println("cache lookup successfull")
+		return markdown, nil
+	} else {
+		log.Printf("getPageMarkdown: cache is not set for the id: %d\n", idx)
+	}
+
+	ch := make(chan result, 1)
+
+	go func() {
+		m, e := getHTML(item.Link, item.Title)
+		ch <- result{m, e}
+	}()
+
+	res := <-ch
+	if res.err == nil {
+		if idx == len(rss.Channel.ItemList) - 1 {
+			latest = true
+		}
+		storeInCache(idx, res.md, latest)
+		return res.md, nil
+	}
+	return "", res.err
+}
+
 func genPageMarkdown(id string, theme string) (string, error) {
 
-	var markdown string
 	var idx int
-
 	idx, err := strconv.Atoi(id)
 
 	if err != nil {
-		log.Printf("getHtml: error converting id to an int %s\n", err)
+		log.Printf("genPageMarkdown: error converting id to an int %s\n", err)
 		idx = len(rss.Channel.ItemList) - 1
 	}
 
-	if idx < 0 {
-		return "", NegativeId
-	}
-
-	// If requested page ID is greater than the total pages
-	// set idx to most recent page
-	if idx > len(rss.Channel.ItemList)-1 {
-		idx = len(rss.Channel.ItemList) - 1
-	}
-
-	var item Item = rss.Channel.ItemList[idx]
-	_, prs := cache[item.Title]
-
-	storefile := func(filename string) {
-		file, err := os.Create(filename)
-		if err != nil {
-			log.Printf("Error creating file: %s", err)
-		} else {
-			defer file.Close()
-			_, err = file.WriteString(markdown)
-
-			if err != nil {
-				log.Printf("Error writing to the file: %s", err)
-			}
-		}
-	}
-	filename := fmt.Sprintf("%s.txt", item.Title)
-	if !prs {
-		log.Printf("Page \"%s\" not present in the cache", item.Title)
-		cache[item.Title] = filename
-	}
-
-	if _, err := os.Stat(filename); err != nil {
-
-		markdown, err = getHTML(item.Link, item.Title)
-		if err != nil {
-			return "", fmt.Errorf("genPageMarkdown: Error Fetching html %s:\n", err)
-		}
-		storefile(filename)
-		return renderMarkdown(markdown, 120, theme), nil
-
-	}
-
-	log.Printf("Stat successful. Path %s exists\n", filename)
-	log.Printf("Using cached path \"%s\"\n", filename)
-
-	data, err := os.ReadFile(filename)
+	item, idx, err := getRssPageData(idx)
 
 	if err != nil {
-		log.Printf("genPageMarkdown: Error readind file \"%s\" due to %s", filename, err)
-		if markdown, err := getHTML(item.Link, item.Title); err == nil {
-		return renderMarkdown(markdown, 120, theme), nil
-		}
-	} else {
-	 markdown = string(data)
+		log.Printf("Failed to get rss page data for the specifed index\n")
+		return "", err
 	}
 
+	markdown, err := getPageMarkdown(idx, item)
+
+	if err != nil {
+		log.Printf("genPageMarkdown: getPageMarkdown failed: %s\n", err)
+	}
+	
 	return renderMarkdown(markdown, 120, theme), nil
 }
 
@@ -217,7 +228,7 @@ func renderMarkdown(data string, wrap int, theme string) string {
 
 	out, err := r.Render(data)
 	if err != nil {
-		fmt.Printf("renderMarkdown: An error occured during rendering markdown %s", err)
+		log.Printf("renderMarkdown: An error occured during rendering markdown %s", err)
 		out, _ := r.Render("# Error 500")
 		return out
 	}
