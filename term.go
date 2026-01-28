@@ -127,18 +127,10 @@ func getHTML(pageURL, pageTitle string) (string, error) {
 	}
 	return markdown, nil
 }
-func getRssPageData(id string) (Item, error) {
-
-	var idx int
-	idx, err := strconv.Atoi(id)
-
-	if err != nil {
-		log.Printf("getHtml: error converting id to an int %s\n", err)
-		idx = len(rss.Channel.ItemList) - 1
-	}
+func getRssPageData(idx int) (Item, int, error) {
 
 	if idx < 0 {
-		return Item{}, NegativeId
+		return Item{}, 0, NegativeId
 	}
 
 	if idx > len(rss.Channel.ItemList)-1 {
@@ -146,6 +138,7 @@ func getRssPageData(id string) (Item, error) {
 		// greater than the total list size is passed
 		// Need a mechanism to ignore repetated fetch
 		// within a time frame
+		log.Printf("Requested id: %d is larger than the rss content list, fetching rss data gain", idx)
 		var updates = make(chan Rss)
 		go updateRssList(updates)
 		rss = <-updates
@@ -156,20 +149,22 @@ func getRssPageData(id string) (Item, error) {
 		}
 	}
 
-	return rss.Channel.ItemList[idx], nil
+	return rss.Channel.ItemList[idx], idx, nil
 }
 
-func getPageMarkdown(id string, item Item) (string, error) {
+func getPageMarkdown(idx int, item Item) (string, error) {
 
+	latest := false
 	type result struct {
 		md string
 		err error
 	}
 
-	if markdown, err := pageInCache(id); err == nil {
+	if markdown, isSet := getFromCache(idx);  isSet {
+		log.Println("cache lookup successfull")
 		return markdown, nil
 	} else {
-		log.Printf("getPageMarkdown: Check cache failed: %s\n", err)
+		log.Printf("getPageMarkdown: cache is not set for the id: %d\n", idx)
 	}
 
 	ch := make(chan result, 1)
@@ -181,7 +176,10 @@ func getPageMarkdown(id string, item Item) (string, error) {
 
 	res := <-ch
 	if res.err == nil {
-		storeInCache(id, res.md)
+		if idx == len(rss.Channel.ItemList) - 1 {
+			latest = true
+		}
+		storeInCache(idx, res.md, latest)
 		return res.md, nil
 	}
 	return "", res.err
@@ -189,15 +187,22 @@ func getPageMarkdown(id string, item Item) (string, error) {
 
 func genPageMarkdown(id string, theme string) (string, error) {
 
+	var idx int
+	idx, err := strconv.Atoi(id)
 
-	item, err := getRssPageData(id)
+	if err != nil {
+		log.Printf("genPageMarkdown: error converting id to an int %s\n", err)
+		idx = len(rss.Channel.ItemList) - 1
+	}
+
+	item, idx, err := getRssPageData(idx)
 
 	if err != nil {
 		log.Printf("Failed to get rss page data for the specifed index\n")
 		return "", err
 	}
 
-	markdown, err := getPageMarkdown(id, item)
+	markdown, err := getPageMarkdown(idx, item)
 
 	if err != nil {
 		log.Printf("genPageMarkdown: getPageMarkdown failed: %s\n", err)

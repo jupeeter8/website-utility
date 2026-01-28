@@ -1,107 +1,49 @@
 package main
 
 import (
-	"encoding/xml"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"sort"
+	"sync"
 	"time"
+
+	"zgo.at/zcache/v2"
 )
 
-var cache = make(map[string]string)
-var rss Rss
+var (
+	c *zcache.Cache[int, string]
+	once sync.Once
+)
+func initcache() {
+	once.Do(func() {
+		c = zcache.New[int, string](30*time.Minute, 40*time.Minute)
+	})
 
-type Rss struct {
-	Channel *Channel `xml:"channel"`
 }
 
-type Channel struct {
-	ItemList []Item `xml:"item"`
+func cache() *zcache.Cache[int, string] {
+	initcache()
+	return c
 }
 
-type Item struct {
-	Title   string `xml:"title"`
-	Link    string `xml:"link"`
-	PubDate string `xml:"pubDate"`
-}
 
-func fetchXML() (Rss, error) {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Get(fmt.Sprintf("%s/feed", cfg.BaseUrl))
-	if err != nil {
-		log.Printf("fetchXML: failed to fetch rss feed %s\n", err)
-		return Rss{}, err
-	}
-	defer resp.Body.Close()
-	log.Println("Successfully fetched xml")
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("fetchXML: failure in reading body of the response %s\n", err)
-		return Rss{}, err
-	}
-	var rss Rss
-	if err := xml.Unmarshal(body, &rss); err != nil {
-		log.Printf("fetchXML: failure in parsing XML body %s\n", err)
-		return Rss{}, err
-	}
-	log.Println("XML Unmarshal successful")
-	return rss, nil
-}
+func storeInCache(idx int, md string, latest bool) {
 
-func updateRssList(updates chan Rss) {
-	log.Println("getXML: performing an rss fetch")
-	rssFeed, err := fetchXML()
-	if err != nil {
-		log.Printf("getXML: fetch failed: %s", err)
+	c:= cache()
+
+	if latest {
+		log.Printf("id: %d is latest page entry, storing it with no expiration", idx)
+		c.SetWithExpire(idx, md, zcache.NoExpiration)
+		c.Touch(idx - 1)
 		return
 	}
-	updates <- rssFeed
 
+	c.Set(idx, md)
 }
 
-func sortFeed() {
-	sort.Slice(rss.Channel.ItemList, func(i, j int) bool {
-		timeI, err1 := time.Parse(time.RFC1123, rss.Channel.ItemList[i].PubDate)
-		timeJ, err2 := time.Parse(time.RFC1123, rss.Channel.ItemList[j].PubDate)
+func getFromCache(idx int) (string, bool){
 
-		if err1 != nil || err2 != nil {
-			return false
-		}
-		return timeJ.After(timeI)
-
-	})
+	return cache().Get(idx)
 }
 
-func getXML() {
-
-	var updates = make(chan Rss, 1)
-	var ticker = time.Tick(30 * time.Minute)
-
-	updateRssList(updates)
-
-	log.Println("Intial fetch complete")
-	for {
-		select {
-		case rss = <-updates:
-			sortFeed()
-		case <-ticker:
-			updateRssList(updates)
-		}
-	}
-
-}
-
-func genCacheMap() {
-
-	for _, item := range rss.Channel.ItemList {
-		_, prs := cache[item.Title]
-		if !prs {
-			cache[item.Title] = item.Title
-		}
-	}
-
+func DeleteFromCache(idx int) {
+	cache().Delete(idx)
 }
