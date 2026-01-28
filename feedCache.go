@@ -28,7 +28,7 @@ type Item struct {
 }
 
 func fetchXML() (Rss, error) {
-	client := &http.Client {
+	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 	resp, err := client.Get(fmt.Sprintf("%s/feed", cfg.BaseUrl))
@@ -51,50 +51,56 @@ func fetchXML() (Rss, error) {
 	log.Println("XML Unmarshal successful")
 	return rss, nil
 }
-func genCacheMap() {
 
-	for _, item := range rss.Channel.ItemList {
-		_, prs :=  cache[item.Title]
-		if !prs {
-			cache[item.Title] = item.Title
-		}
+func updateRssList(updates chan Rss) {
+	log.Println("getXML: performing an rss fetch")
+	rssFeed, err := fetchXML()
+	if err != nil {
+		log.Printf("getXML: fetch failed: %s", err)
+		return
 	}
+	updates <- rssFeed
 
 }
+
+func sortFeed() {
+	sort.Slice(rss.Channel.ItemList, func(i, j int) bool {
+		timeI, err1 := time.Parse(time.RFC1123, rss.Channel.ItemList[i].PubDate)
+		timeJ, err2 := time.Parse(time.RFC1123, rss.Channel.ItemList[j].PubDate)
+
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		return timeJ.After(timeI)
+
+	})
+}
+
 func getXML() {
 
 	var updates = make(chan Rss, 1)
 	var ticker = time.Tick(30 * time.Minute)
 
-	fetch := func() {
-		log.Println("getXML: performing an rss fetch")
-		rssFeed, err := fetchXML()
-		if err != nil {
-			log.Printf("getXML: fetch failed: %s", err)
-			return
-		}
-		updates <- rssFeed
-	}
+	updateRssList(updates)
 
-	fetch()
 	log.Println("Intial fetch complete")
 	for {
 		select {
 		case rss = <-updates:
-			log.Println("Recieved latest rss xml")
-			sort.Slice(rss.Channel.ItemList, func(i, j int) bool {
-				timeI, err1 := time.Parse(time.RFC1123, rss.Channel.ItemList[i].PubDate)
-				timeJ, err2 := time.Parse(time.RFC1123, rss.Channel.ItemList[j].PubDate)
-
-				if err1 != nil || err2 != nil {
-					return false
-				}
-				return timeJ.After(timeI)
-
-			})
-			genCacheMap()
+			sortFeed()
 		case <-ticker:
-			fetch()
+			updateRssList(updates)
+		}
+	}
+
+}
+
+func genCacheMap() {
+
+	for _, item := range rss.Channel.ItemList {
+		_, prs := cache[item.Title]
+		if !prs {
+			cache[item.Title] = item.Title
 		}
 	}
 

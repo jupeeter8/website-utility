@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -128,11 +127,9 @@ func getHTML(pageURL, pageTitle string) (string, error) {
 	}
 	return markdown, nil
 }
-func genPageMarkdown(id string, theme string) (string, error) {
+func getRssPageData(id string) (Item, error) {
 
-	var markdown string
 	var idx int
-
 	idx, err := strconv.Atoi(id)
 
 	if err != nil {
@@ -141,62 +138,71 @@ func genPageMarkdown(id string, theme string) (string, error) {
 	}
 
 	if idx < 0 {
-		return "", NegativeId
+		return Item{}, NegativeId
 	}
 
-	// If requested page ID is greater than the total pages
-	// set idx to most recent page
 	if idx > len(rss.Channel.ItemList)-1 {
-		idx = len(rss.Channel.ItemList) - 1
-	}
+		// TODO: This will force updates everytime a id
+		// greater than the total list size is passed
+		// Need a mechanism to ignore repetated fetch
+		// within a time frame
+		var updates = make(chan Rss)
+		go updateRssList(updates)
+		rss = <-updates
+		sortFeed()
 
-	var item Item = rss.Channel.ItemList[idx]
-	_, prs := cache[item.Title]
-
-	storefile := func(filename string) {
-		file, err := os.Create(filename)
-		if err != nil {
-			log.Printf("Error creating file: %s", err)
-		} else {
-			defer file.Close()
-			_, err = file.WriteString(markdown)
-
-			if err != nil {
-				log.Printf("Error writing to the file: %s", err)
-			}
+		if idx > len(rss.Channel.ItemList) - 1 {
+			idx = len(rss.Channel.ItemList) - 1
 		}
 	}
-	filename := fmt.Sprintf("%s.txt", item.Title)
-	if !prs {
-		log.Printf("Page \"%s\" not present in the cache", item.Title)
-		cache[item.Title] = filename
+
+	return rss.Channel.ItemList[idx], nil
+}
+
+func getPageMarkdown(id string, item Item) (string, error) {
+
+	type result struct {
+		md string
+		err error
 	}
 
-	if _, err := os.Stat(filename); err != nil {
-
-		markdown, err = getHTML(item.Link, item.Title)
-		if err != nil {
-			return "", fmt.Errorf("genPageMarkdown: Error Fetching html %s:\n", err)
-		}
-		storefile(filename)
-		return renderMarkdown(markdown, 120, theme), nil
-
+	if markdown, err := pageInCache(id); err == nil {
+		return markdown, nil
+	} else {
+		log.Printf("getPageMarkdown: Check cache failed: %s\n", err)
 	}
 
-	log.Printf("Stat successful. Path %s exists\n", filename)
-	log.Printf("Using cached path \"%s\"\n", filename)
+	ch := make(chan result, 1)
 
-	data, err := os.ReadFile(filename)
+	go func() {
+		m, e := getHTML(item.Link, item.Title)
+		ch <- result{m, e}
+	}()
+
+	res := <-ch
+	if res.err == nil {
+		storeInCache(id, res.md)
+		return res.md, nil
+	}
+	return "", res.err
+}
+
+func genPageMarkdown(id string, theme string) (string, error) {
+
+
+	item, err := getRssPageData(id)
 
 	if err != nil {
-		log.Printf("genPageMarkdown: Error readind file \"%s\" due to %s", filename, err)
-		if markdown, err := getHTML(item.Link, item.Title); err == nil {
-		return renderMarkdown(markdown, 120, theme), nil
-		}
-	} else {
-	 markdown = string(data)
+		log.Printf("Failed to get rss page data for the specifed index\n")
+		return "", err
 	}
 
+	markdown, err := getPageMarkdown(id, item)
+
+	if err != nil {
+		log.Printf("genPageMarkdown: getPageMarkdown failed: %s\n", err)
+	}
+	
 	return renderMarkdown(markdown, 120, theme), nil
 }
 
@@ -217,7 +223,7 @@ func renderMarkdown(data string, wrap int, theme string) string {
 
 	out, err := r.Render(data)
 	if err != nil {
-		fmt.Printf("renderMarkdown: An error occured during rendering markdown %s", err)
+		log.Printf("renderMarkdown: An error occured during rendering markdown %s", err)
 		out, _ := r.Render("# Error 500")
 		return out
 	}
